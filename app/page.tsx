@@ -19,6 +19,7 @@ import {
   Timer,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { ControlsPanel, UseCase as UseCaseType } from "@/components/ControlsPanel"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
@@ -263,7 +264,9 @@ export default function Page() {
     return 1 - nNeededQr / nNeededPr
   }
   // Controls
-  const [useCase, setUseCase] = useState<UseCase>("var")
+  const [useCase, setUseCase] = useState<UseCase>("option")
+  const [varParams, setVarParams] = useState({ confidence: 0.99, paths: 50000 })
+  const [optionParams, setOptionParams] = useState({ S0: 100, K: 100, r: 0.01, sigma: 0.2, T: 1, paths: 100000 })
   const [rngFocus, setRngFocus] = useState<RNG>("quantum")
   const [running, setRunning] = useState(false)
 
@@ -772,37 +775,17 @@ export default function Page() {
             <span className="text-base sm:text-lg font-semibold tracking-tight">qrngtoolkit</span>
           </div>
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
-            {/* Use Case Select */}
-            <Select value={useCase} onValueChange={(v) => setUseCase(v as UseCase)}>
-              <SelectTrigger className="w-[200px]" aria-label="Select use case">
-                <SelectValue placeholder="Select Use Case" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <Label className="px-2 py-1 text-xs text-muted-foreground">Use Case</Label>
-                  <SelectItem value="var">VaR Simulation</SelectItem>
-                  <SelectItem value="option">Option Pricing</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-
-            {/* RNG Focus Toggle */}
-            <Select value={rngFocus} onValueChange={(v) => setRngFocus(v as RNG)}>
-              <SelectTrigger className="w-[200px]" aria-label="Select RNG type">
-                <SelectValue placeholder="RNG Type" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <Label className="px-2 py-1 text-xs text-muted-foreground">RNG Type</Label>
-                  <SelectItem value="quantum">Quantum RNG</SelectItem>
-                  <SelectItem value="classical">Classical RNG</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-
-            {!running ? (
-              <Button
-                onClick={async () => {
+            <div className="w-full">
+              <ControlsPanel
+                useCase={useCase as UseCaseType}
+                rng={rngFocus === "quantum" ? "qrng" : "prng"}
+                varParams={varParams}
+                optionParams={{ ...optionParams, symbol: undefined }}
+                onChangeUseCase={(uc) => setUseCase(uc as UseCase)}
+                onChangeRng={(r) => setRngFocus(r === "qrng" ? "quantum" : "classical")}
+                onChangeVar={(vp) => setVarParams(vp)}
+                onChangeOption={(op) => setOptionParams(op)}
+                onRun={async () => {
                   if (useCase === "option") {
                     totalsPRNG.current = { sum: 0, sumSq: 0 }
                     totalsQRNG.current = { sum: 0, sumSq: 0 }
@@ -813,7 +796,7 @@ export default function Page() {
                   // Fire server-side simulations in parallel
                   try {
                     if (useCase === "var") {
-                      const reqBody = { confidence: 0.99, paths: 50000 }
+                      const reqBody = { confidence: varParams.confidence, paths: varParams.paths }
                       const [prng, qrng] = await Promise.all([
                         simVar.mutateAsync("prng"),
                         simVar.mutateAsync("qrng"),
@@ -829,7 +812,7 @@ export default function Page() {
                       )
                       setServerAdvantage(adv)
                     } else {
-                      const reqBody = { S0: 100, K: 100, r: 0.01, sigma: 0.2, T: 1, paths: 100000 }
+                      const reqBody = { ...optionParams }
                       const [prng, qrng] = await Promise.all([
                         simOption.mutateAsync("prng"),
                         simOption.mutateAsync("qrng"),
@@ -846,17 +829,9 @@ export default function Page() {
                     // best-effort; UI continues with client demo
                   }
                 }}
-                className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow"
-              >
-                <Play className="h-4 w-4" />
-                Run Simulation
-              </Button>
-            ) : (
-              <Button variant="destructive" onClick={() => setRunning(false)} className="gap-2">
-                <Square className="h-4 w-4" />
-                Stop
-              </Button>
-            )}
+                running={running}
+              />
+            </div>
           </div>
         </div>
       </header>
@@ -922,7 +897,7 @@ export default function Page() {
         </Card>
       </section>
 
-      {/* Main Visualization Panel */}
+      {/* Main Visualization Panel (Option-focused) */}
       <section className="mx-auto max-w-7xl w-full px-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Left: Distribution & Outcomes */}
         <Card className="h-[460px]">
@@ -1000,33 +975,7 @@ export default function Page() {
                 </RLineChart>
               </ChartContainer>
             </div>
-            {/* Quantile stability for VaR */}
-            {useCase === "var" && (
-              <div className="h-[140px]">
-                <ChartContainer
-                  config={{
-                    prng: { label: "PRNG VaR", color: "hsl(var(--chart-2))", icon: Database },
-                    qrng: { label: "QRNG VaR", color: "hsl(var(--chart-1))", icon: Atom },
-                  }}
-                  className="h-full w-full"
-                >
-                    <RLineChart data={quantileSeries}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                      <XAxis
-                        dataKey="n"
-                        tickLine={false}
-                        axisLine={false}
-                        tick={{ fontSize: 12 }}
-                        tickFormatter={(v) => fmtInt(v)}
-                      />
-                      <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
-                      <ChartTooltip content={<ChartTooltipContent />} />
-                      <Line type="monotone" dataKey="prng" stroke="var(--color-prng)" dot={false} />
-                      <Line type="monotone" dataKey="qrng" stroke="var(--color-qrng)" dot={false} />
-                    </RLineChart>
-                </ChartContainer>
-              </div>
-            )}
+            {/* Removed VaR-specific secondary plot for option-focused UI */}
           </CardContent>
         </Card>
       </section>

@@ -60,9 +60,10 @@ export async function POST(request: Request) {
 
   // Upstream API docs: https://qrng.anu.edu.au/contact/api-documentation/
   const typeParam = dtype // 'uint8' | 'uint16'
-  const url = new URL('https://qrng.anu.edu.au/API/jsonI.php')
-  url.searchParams.set('length', String(count))
-  url.searchParams.set('type', typeParam)
+
+  // Some upstreams limit max length per call; be robust by chunking here so callers
+  // can request any count once without managing chunks themselves.
+  const MAX_PER_CALL = 1024
 
   const cacheKey = stableStringify({ count, dtype, normalize })
   const now = Date.now()
@@ -72,26 +73,47 @@ export async function POST(request: Request) {
     return NextResponse.json(enriched)
   }
 
-  let upstream: AnuResponse
-  try {
-    // basic retry: up to 2 retries with small backoff
+  async function fetchUpstreamChunk(len: number, attemptBaseDelay = 150): Promise<number[]> {
+    const url = new URL('https://qrng.anu.edu.au/API/jsonI.php')
+    url.searchParams.set('length', String(len))
+    url.searchParams.set('type', typeParam)
     let lastErr: any = null
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 6; attempt++) {
       try {
-        const res = await fetch(url.toString(), { cache: 'no-store' })
+        const controller = new AbortController()
+        const t = setTimeout(() => controller.abort(), 6000)
+        const res = await fetch(url.toString(), { cache: 'no-store', signal: controller.signal })
+        clearTimeout(t)
         if (!res.ok) {
           lastErr = new Error(`Status ${res.status}`)
         } else {
-          upstream = (await res.json()) as AnuResponse
-          lastErr = null
-          break
+          const upstream = (await res.json()) as AnuResponse
+          if (upstream.success && Array.isArray(upstream.data)) {
+            return upstream.data
+          }
+          lastErr = new Error('Malformed upstream payload')
         }
       } catch (e) {
         lastErr = e
       }
-      await new Promise((r) => setTimeout(r, 150 * (attempt + 1)))
+      // backoff
+      await new Promise((r) => setTimeout(r, attemptBaseDelay * (attempt + 1)))
     }
-    if (lastErr) throw lastErr
+    throw lastErr || new Error('QRNG upstream failed')
+  }
+
+  // Accumulate in chunks
+  let ints: number[] = []
+  try {
+    let remaining = count
+    while (remaining > 0) {
+      const take = Math.min(MAX_PER_CALL, remaining)
+      const chunk = await fetchUpstreamChunk(take)
+      ints.push(...chunk)
+      remaining -= take
+      // small pacing to avoid rate limiting
+      if (remaining > 0) await new Promise((r) => setTimeout(r, 50))
+    }
   } catch (err) {
     return NextResponse.json(
       { error: 'Failed to reach upstream QRNG service', details: err instanceof Error ? err.message : String(err) },
@@ -99,14 +121,6 @@ export async function POST(request: Request) {
     )
   }
 
-  if (!upstream.success || !Array.isArray(upstream.data)) {
-    return NextResponse.json(
-      { error: 'Malformed response from QRNG service', upstream },
-      { status: 502 },
-    )
-  }
-
-  const ints = upstream.data
   const payload: { values: number[]; dtype: RngRequest['dtype']; normalize: boolean; entropy?: { mean: number } } = {
     values: ints,
     dtype,
