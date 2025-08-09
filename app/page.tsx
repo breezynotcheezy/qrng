@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
+import { useMutation } from "@tanstack/react-query"
 import {
   Activity,
   Atom,
@@ -215,6 +216,30 @@ const errorChartConfig = {
 } as const
 
 export default function Page() {
+  // Server-side simulations via API
+  const simVar = useMutation({
+    mutationFn: async (rng: "qrng" | "prng") => {
+      const res = await fetch("/api/sim/var", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confidence: 0.99, rng, paths: 50000 }),
+      })
+      if (!res.ok) throw new Error("/api/sim/var failed")
+      return res.json()
+    },
+  })
+  const simOption = useMutation({
+    mutationFn: async (rng: "qrng" | "prng") => {
+      const res = await fetch("/api/sim/option", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ S0: 100, K: 100, r: 0.01, sigma: 0.2, T: 1, paths: 100000, rng }),
+      })
+      if (!res.ok) throw new Error("/api/sim/option failed")
+      return res.json()
+    },
+  })
+  const [serverResults, setServerResults] = useState<{ var?: any; option?: any } | null>(null)
   // Controls
   const [useCase, setUseCase] = useState<UseCase>("var")
   const [rngFocus, setRngFocus] = useState<RNG>("quantum")
@@ -757,13 +782,29 @@ export default function Page() {
 
             {!running ? (
               <Button
-                onClick={() => {
+                onClick={async () => {
                   if (useCase === "option") {
                     totalsPRNG.current = { sum: 0, sumSq: 0 }
                     totalsQRNG.current = { sum: 0, sumSq: 0 }
                     totalsN.current = 0
                   }
+                  // Start local client simulation
                   setRunning(true)
+                  // Fire server-side simulations in parallel
+                  try {
+                    if (useCase === "var") {
+                      const [prng, qrng] = await Promise.all([simVar.mutateAsync("prng"), simVar.mutateAsync("qrng")])
+                      setServerResults({ var: { prng, qrng } })
+                    } else {
+                      const [prng, qrng] = await Promise.all([
+                        simOption.mutateAsync("prng"),
+                        simOption.mutateAsync("qrng"),
+                      ])
+                      setServerResults({ option: { prng, qrng } })
+                    }
+                  } catch (_) {
+                    // best-effort; UI continues with client demo
+                  }
                 }}
                 className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow"
               >
@@ -1040,6 +1081,14 @@ export default function Page() {
                   <span>{"QRNG"}</span>
                 </div>
               </div>
+              {serverResults && (
+                <div className="mt-4 text-xs text-muted-foreground">
+                  <div>Server results available:</div>
+                  <pre className="whitespace-pre-wrap break-words">
+{JSON.stringify(serverResults, null, 2)}
+                  </pre>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
