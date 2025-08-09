@@ -31,16 +31,7 @@ import {
   ChartLegend,
   ChartLegendContent,
 } from "@/components/ui/chart"
-import {
-  Area,
-  AreaChart,
-  Line,
-  LineChart as RLineChart,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  ResponsiveContainer,
-} from "recharts"
+import { Area, AreaChart, Line, LineChart as RLineChart, XAxis, YAxis, CartesianGrid } from "recharts"
 
 // Types
 type UseCase = "var" | "option"
@@ -240,6 +231,37 @@ export default function Page() {
     },
   })
   const [serverResults, setServerResults] = useState<{ var?: any; option?: any } | null>(null)
+  const [serverAdvantage, setServerAdvantage] = useState<number>(0)
+  const [serverReproId, setServerReproId] = useState<string>("")
+
+  function fnv1a32(str: string): string {
+    let h = 0x811c9dc5
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i)
+      h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)
+    }
+    return (h >>> 0).toString(16)
+  }
+
+  function ciSpan(ci: [number, number]): number {
+    return Math.abs(ci[1] - ci[0])
+  }
+
+  function computeAdvantageFromCIs(
+    widthPr: number,
+    widthQr: number,
+    nPr: number,
+    nQr: number,
+  ): number {
+    if (widthPr <= 0 || widthQr <= 0 || nPr <= 0 || nQr <= 0) return 0
+    // width ~ C / sqrt(n) => C = width * sqrt(n)
+    const Cpr = widthPr * Math.sqrt(nPr)
+    const Cqr = widthQr * Math.sqrt(nQr)
+    const targetWidth = Math.min(widthPr, widthQr)
+    const nNeededPr = (Cpr / targetWidth) ** 2
+    const nNeededQr = (Cqr / targetWidth) ** 2
+    return 1 - nNeededQr / nNeededPr
+  }
   // Controls
   const [useCase, setUseCase] = useState<UseCase>("var")
   const [rngFocus, setRngFocus] = useState<RNG>("quantum")
@@ -676,8 +698,6 @@ export default function Page() {
     doc.setFontSize(10)
     doc.text(`Use Case: ${useCase === "var" ? "VaR Simulation" : "Option Pricing (Black-Scholes)"}`, 10, y)
     y += 8
-    doc.setFontSize(10)
-    doc.text(`Use Case: ${useCase === "var" ? "VaR Simulation" : "Option Pricing (Black-Scholes)"}`, 10, y)
     y += 6
     doc.text(`Samples: ${fmtInt(totalSamples)} per stream`, 10, y)
     y += 6
@@ -793,14 +813,34 @@ export default function Page() {
                   // Fire server-side simulations in parallel
                   try {
                     if (useCase === "var") {
-                      const [prng, qrng] = await Promise.all([simVar.mutateAsync("prng"), simVar.mutateAsync("qrng")])
+                      const reqBody = { confidence: 0.99, paths: 50000 }
+                      const [prng, qrng] = await Promise.all([
+                        simVar.mutateAsync("prng"),
+                        simVar.mutateAsync("qrng"),
+                      ])
+                      const key = fnv1a32(JSON.stringify({ route: "var", ...reqBody }))
+                      setServerReproId(key)
                       setServerResults({ var: { prng, qrng } })
+                      const adv = computeAdvantageFromCIs(
+                        ciSpan(prng.ci),
+                        ciSpan(qrng.ci),
+                        prng.sampleCount,
+                        qrng.sampleCount,
+                      )
+                      setServerAdvantage(adv)
                     } else {
+                      const reqBody = { S0: 100, K: 100, r: 0.01, sigma: 0.2, T: 1, paths: 100000 }
                       const [prng, qrng] = await Promise.all([
                         simOption.mutateAsync("prng"),
                         simOption.mutateAsync("qrng"),
                       ])
+                      const key = fnv1a32(JSON.stringify({ route: "option", ...reqBody }))
+                      setServerReproId(key)
                       setServerResults({ option: { prng, qrng } })
+                      const widthPr = 2 * 1.96 * prng.stderr
+                      const widthQr = 2 * 1.96 * qrng.stderr
+                      const adv = computeAdvantageFromCIs(widthPr, widthQr, prng.sampleCount, qrng.sampleCount)
+                      setServerAdvantage(adv)
                     }
                   } catch (_) {
                     // best-effort; UI continues with client demo
@@ -899,34 +939,32 @@ export default function Page() {
           </CardHeader>
           <CardContent className="h-[380px]">
             <ChartContainer config={densityChartConfig} className="h-full w-full">
-              <ResponsiveContainer>
-                <AreaChart data={densityData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="x" tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
-                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
-                  <ChartTooltip content={<ChartTooltipContent />} />
-                  {/* Confidence bands */}
-                  <Area dataKey="prngUpper" stroke="transparent" fill="transparent" />
-                  <Area dataKey="prngLower" stroke="transparent" fill="transparent" />
-                  <Area dataKey="qrngUpper" stroke="transparent" fill="transparent" />
-                  <Area dataKey="qrngLower" stroke="transparent" fill="transparent" />
-                  {/* Densities */}
-                  <Area
-                    type="monotone"
-                    dataKey="prng"
-                    stroke="var(--color-prng)"
-                    fill="var(--color-prng)"
-                    fillOpacity={0.2}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="qrng"
-                    stroke="var(--color-qrng)"
-                    fill="var(--color-qrng)"
-                    fillOpacity={0.25}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              <AreaChart data={densityData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="x" tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
+                <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                {/* Confidence bands */}
+                <Area dataKey="prngUpper" stroke="transparent" fill="transparent" />
+                <Area dataKey="prngLower" stroke="transparent" fill="transparent" />
+                <Area dataKey="qrngUpper" stroke="transparent" fill="transparent" />
+                <Area dataKey="qrngLower" stroke="transparent" fill="transparent" />
+                {/* Densities */}
+                <Area
+                  type="monotone"
+                  dataKey="prng"
+                  stroke="var(--color-prng)"
+                  fill="var(--color-prng)"
+                  fillOpacity={0.2}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="qrng"
+                  stroke="var(--color-qrng)"
+                  fill="var(--color-qrng)"
+                  fillOpacity={0.25}
+                />
+              </AreaChart>
             </ChartContainer>
           </CardContent>
         </Card>
@@ -945,23 +983,21 @@ export default function Page() {
           <CardContent className="space-y-4">
             <div className="h-[240px]">
               <ChartContainer config={errorChartConfig} className="h-full w-full">
-                <ResponsiveContainer>
-                  <RLineChart data={errorSeries}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis
-                      dataKey="n"
-                      tickLine={false}
-                      axisLine={false}
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(v) => fmtInt(v)}
-                    />
-                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
-                    <ChartTooltip content={<ChartTooltipContent />} />
-                    <ChartLegend content={<ChartLegendContent />} />
-                    <Line type="monotone" dataKey="prngError" stroke="var(--color-prngError)" dot={false} />
-                    <Line type="monotone" dataKey="qrngError" stroke="var(--color-qrngError)" dot={false} />
-                  </RLineChart>
-                </ResponsiveContainer>
+                <RLineChart data={errorSeries}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis
+                    dataKey="n"
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fontSize: 12 }}
+                    tickFormatter={(v) => fmtInt(v)}
+                  />
+                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
+                  <ChartTooltip content={<ChartTooltipContent />} />
+                  <ChartLegend content={<ChartLegendContent />} />
+                  <Line type="monotone" dataKey="prngError" stroke="var(--color-prngError)" dot={false} />
+                  <Line type="monotone" dataKey="qrngError" stroke="var(--color-qrngError)" dot={false} />
+                </RLineChart>
               </ChartContainer>
             </div>
             {/* Quantile stability for VaR */}
@@ -974,7 +1010,6 @@ export default function Page() {
                   }}
                   className="h-full w-full"
                 >
-                  <ResponsiveContainer>
                     <RLineChart data={quantileSeries}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} />
                       <XAxis
@@ -989,7 +1024,6 @@ export default function Page() {
                       <Line type="monotone" dataKey="prng" stroke="var(--color-prng)" dot={false} />
                       <Line type="monotone" dataKey="qrng" stroke="var(--color-qrng)" dot={false} />
                     </RLineChart>
-                  </ResponsiveContainer>
                 </ChartContainer>
               </div>
             )}
@@ -1043,6 +1077,113 @@ export default function Page() {
         </Card>
       </section>
 
+      {/* Server Results KPIs */}
+      {serverResults?.var && (
+        <section className="mx-auto max-w-7xl w-full px-4 py-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium">Server VaR (PRNG)</CardTitle>
+              <Database className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent className="space-y-1">
+              <div className="text-xl font-semibold">{serverResults.var.prng.var.toFixed(4)}</div>
+              <p className="text-xs text-muted-foreground">CI width: {ciSpan(serverResults.var.prng.ci).toFixed(4)}</p>
+              <p className="text-xs text-muted-foreground">Runtime: {fmtMs(serverResults.var.prng.runtimeMs)}</p>
+              <p className="text-xs text-muted-foreground">Samples: {fmtInt(serverResults.var.prng.sampleCount)}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium">Server VaR (QRNG)</CardTitle>
+              <Atom className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent className="space-y-1">
+              <div className="text-xl font-semibold">{serverResults.var.qrng.var.toFixed(4)}</div>
+              <p className="text-xs text-muted-foreground">CI width: {ciSpan(serverResults.var.qrng.ci).toFixed(4)}</p>
+              <p className="text-xs text-muted-foreground">Runtime: {fmtMs(serverResults.var.qrng.runtimeMs)}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-muted-foreground">Samples: {fmtInt(serverResults.var.qrng.sampleCount)}</p>
+                {serverResults.var.qrng.qrngFallback && (
+                  <Badge variant="secondary" className="text-[10px]">fallback</Badge>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium">Quantum Advantage (server)</CardTitle>
+              <Gauge className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-xl font-semibold">{`${(serverAdvantage * 100).toFixed(1)}% fewer samples`}</div>
+              <p className="text-xs text-muted-foreground">Based on CI widths at equal precision</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium">Repro ID</CardTitle>
+              <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-xs font-mono break-all">{serverReproId}</div>
+            </CardContent>
+          </Card>
+        </section>
+      )}
+
+      {serverResults?.option && (
+        <section className="mx-auto max-w-7xl w-full px-4 py-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium">Server Price (PRNG)</CardTitle>
+              <Database className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent className="space-y-1">
+              <div className="text-xl font-semibold">{serverResults.option.prng.mean.toFixed(4)}</div>
+              <p className="text-xs text-muted-foreground">CI width: {(2 * 1.96 * serverResults.option.prng.stderr).toFixed(4)}</p>
+              <p className="text-xs text-muted-foreground">Runtime: {fmtMs(serverResults.option.prng.runtimeMs)}</p>
+              <p className="text-xs text-muted-foreground">Samples: {fmtInt(serverResults.option.prng.sampleCount)}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium">Server Price (QRNG)</CardTitle>
+              <Atom className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent className="space-y-1">
+              <div className="text-xl font-semibold">{serverResults.option.qrng.mean.toFixed(4)}</div>
+              <p className="text-xs text-muted-foreground">CI width: {(2 * 1.96 * serverResults.option.qrng.stderr).toFixed(4)}</p>
+              <p className="text-xs text-muted-foreground">Runtime: {fmtMs(serverResults.option.qrng.runtimeMs)}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-muted-foreground">Samples: {fmtInt(serverResults.option.qrng.sampleCount)}</p>
+                {serverResults.option.qrng.qrngFallback && (
+                  <Badge variant="secondary" className="text-[10px]">fallback</Badge>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium">Quantum Advantage (server)</CardTitle>
+              <Gauge className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-xl font-semibold">{`${(serverAdvantage * 100).toFixed(1)}% fewer samples`}</div>
+              <p className="text-xs text-muted-foreground">Based on CI widths at equal precision</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium">Repro ID</CardTitle>
+              <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-xs font-mono break-all">{serverReproId}</div>
+            </CardContent>
+          </Card>
+        </section>
+      )}
+
       {/* Insights & Export */}
       <section className="mx-auto max-w-7xl w-full px-4 pb-10">
         <Card className="border-emerald-200">
@@ -1063,6 +1204,24 @@ export default function Page() {
                 <Download className="h-4 w-4" />
                 Export CSV
               </Button>
+              {serverResults && (
+                <Button
+                  variant="outline"
+                  className="gap-2 bg-transparent"
+                  onClick={() => {
+                    const blob = new Blob([JSON.stringify(serverResults, null, 2)], { type: "application/json" })
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement("a")
+                    a.href = url
+                    a.download = `server_results_${useCase}_${serverReproId || "latest"}.json`
+                    a.click()
+                    URL.revokeObjectURL(url)
+                  }}
+                >
+                  <Download className="h-4 w-4" />
+                  Export Server JSON
+                </Button>
+              )}
               <Button variant="outline" className="gap-2 bg-transparent" onClick={exportPDF}>
                 <Download className="h-4 w-4" />
                 Export PDF

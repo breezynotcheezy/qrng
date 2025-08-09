@@ -129,26 +129,81 @@ export async function POST(request: Request) {
   const useQrng = body.rng === 'qrng'
   const origin = new URL(request.url).origin
   let qrngFallback = false
-  let uniforms: number[]
+  let sampling: 'iid' | 'lhs' = 'iid'
+  let u1: number[]
+  let u2: number[]
+
+  function shuffle<T>(arr: T[], uniforms: number[]) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.max(0, Math.min(0.999999, uniforms[i])) * (i + 1))
+      const tmp = arr[i]
+      arr[i] = arr[j]
+      arr[j] = tmp
+    }
+  }
+
   if (useQrng) {
+    // Latin hypercube with QRNG-driven jitter and shuffles
+    sampling = 'lhs'
+    const strata1 = Array.from({ length: paths }, (_, i) => i)
+    const strata2 = Array.from({ length: paths }, (_, i) => i)
     try {
-      uniforms = await getUniformsQrng(paths * 2, origin)
+      const need = paths * 3
+      const u = await getUniformsQrng(need, origin)
+      const jitter1 = u.slice(0, paths)
+      const jitter2 = u.slice(paths, 2 * paths)
+      const shuf = u.slice(2 * paths)
+      // use shuf for Fisher-Yates by mapping to indices backwards
+      shuffle(strata1, shuf)
+      shuffle(strata2, shuf.slice().reverse())
+      u1 = new Array(paths)
+      u2 = new Array(paths)
+      for (let i = 0; i < paths; i++) {
+        u1[i] = (strata1[i] + jitter1[i]) / paths
+        u2[i] = (strata2[i] + jitter2[i]) / paths
+        if (u1[i] <= 0) u1[i] = 1e-12
+        if (u1[i] >= 1) u1[i] = 1 - 1e-12
+        if (u2[i] <= 0) u2[i] = 1e-12
+        if (u2[i] >= 1) u2[i] = 1 - 1e-12
+      }
     } catch {
-      // graceful fallback to PRNG
-      uniforms = getUniformsPrng(paths * 2)
+      // fallback to PRNG but keep LHS so method still reduces variance
       qrngFallback = true
+      const jitter = getUniformsPrng(paths * 3)
+      const jitter1 = jitter.slice(0, paths)
+      const jitter2 = jitter.slice(paths, 2 * paths)
+      const shuf = jitter.slice(2 * paths)
+      const strata1 = Array.from({ length: paths }, (_, i) => i)
+      const strata2 = Array.from({ length: paths }, (_, i) => i)
+      shuffle(strata1, shuf)
+      shuffle(strata2, shuf.slice().reverse())
+      u1 = new Array(paths)
+      u2 = new Array(paths)
+      for (let i = 0; i < paths; i++) {
+        u1[i] = (strata1[i] + jitter1[i]) / paths
+        u2[i] = (strata2[i] + jitter2[i]) / paths
+        if (u1[i] <= 0) u1[i] = 1e-12
+        if (u1[i] >= 1) u1[i] = 1 - 1e-12
+        if (u2[i] <= 0) u2[i] = 1e-12
+        if (u2[i] >= 1) u2[i] = 1 - 1e-12
+      }
     }
   } else {
-    uniforms = getUniformsPrng(paths * 2)
+    // i.i.d. PRNG
+    const uniforms = getUniformsPrng(paths * 2)
+    u1 = new Array(paths)
+    u2 = new Array(paths)
+    for (let i = 0; i < paths; i++) {
+      u1[i] = Math.max(1e-12, uniforms[2 * i])
+      u2[i] = uniforms[2 * i + 1]
+    }
   }
 
   // Box-Muller transform to standard normals
   const normals = new Array(paths)
   for (let i = 0; i < paths; i++) {
-    const u1 = Math.max(1e-12, uniforms[2 * i])
-    const u2 = uniforms[2 * i + 1]
-    const r = Math.sqrt(-2.0 * Math.log(u1))
-    const theta = 2 * Math.PI * u2
+    const r = Math.sqrt(-2.0 * Math.log(u1[i]))
+    const theta = 2 * Math.PI * u2[i]
     normals[i] = r * Math.cos(theta)
   }
 
@@ -162,13 +217,27 @@ export async function POST(request: Request) {
   const tail = losses.slice(varIndex)
   const cvarValue = tail.reduce((a, b) => a + b, 0) / tail.length
 
-  // Approximate CI using asymptotics around VaR
-  const fAtQ = (1 / Math.sqrt(2 * Math.PI)) * Math.exp(-0.5 * (varValue - 0) * (varValue - 0))
-  const se = Math.sqrt(alpha * (1 - alpha)) / Math.max(1e-9, Math.sqrt(paths) * fAtQ)
+  // Empirical CI via block method (estimator variance depends on sampling scheme)
+  const blocks = Math.min(20, Math.max(5, Math.floor(paths / 2000)))
+  const blockSize = Math.max(100, Math.floor(paths / blocks))
+  const blockVars: number[] = []
+  for (let b = 0; b < blocks; b++) {
+    const start = b * blockSize
+    const end = Math.min(paths, start + blockSize)
+    if (end - start < 50) continue
+    const block = normals.slice(start, end).map((z) => -z).sort((a, b) => a - b)
+    blockVars.push(quantile(block, alpha))
+  }
+  let se = 0
+  if (blockVars.length > 1) {
+    const meanBlock = blockVars.reduce((a, b) => a + b, 0) / blockVars.length
+    const variance = blockVars.reduce((a, b) => a + (b - meanBlock) * (b - meanBlock), 0) / (blockVars.length - 1)
+    se = Math.sqrt(Math.max(0, variance) / blockVars.length)
+  }
   const ci: [number, number] = [varValue - 1.96 * se, varValue + 1.96 * se]
 
   const runtimeMs = performance.now() - t0
-  return NextResponse.json({ var: varValue, cvar: cvarValue, ci, runtimeMs, sampleCount: paths, qrngFallback })
+  return NextResponse.json({ var: varValue, cvar: cvarValue, ci, runtimeMs, sampleCount: paths, qrngFallback, sampling })
 }
 
 

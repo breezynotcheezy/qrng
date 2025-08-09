@@ -70,17 +70,71 @@ export async function POST(request: Request) {
 
   const t0 = performance.now()
 
-  let uniforms: number[]
   let qrngFallback = false
+  let sampling: 'iid' | 'lhs' = 'iid'
+  let u1: number[]
+  let u2: number[]
+
+  function shuffle<T>(arr: T[], uniforms: number[]) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.max(0, Math.min(0.999999, uniforms[i])) * (i + 1))
+      const tmp = arr[i]
+      arr[i] = arr[j]
+      arr[j] = tmp
+    }
+  }
+
   if (useQrng) {
+    sampling = 'lhs'
+    const strata1 = Array.from({ length: paths }, (_, i) => i)
+    const strata2 = Array.from({ length: paths }, (_, i) => i)
     try {
-      uniforms = await getUniformsQrng(paths * 2, origin)
+      const need = paths * 3
+      const u = await getUniformsQrng(need, origin)
+      const jitter1 = u.slice(0, paths)
+      const jitter2 = u.slice(paths, 2 * paths)
+      const shuf = u.slice(2 * paths)
+      shuffle(strata1, shuf)
+      shuffle(strata2, shuf.slice().reverse())
+      u1 = new Array(paths)
+      u2 = new Array(paths)
+      for (let i = 0; i < paths; i++) {
+        u1[i] = (strata1[i] + jitter1[i]) / paths
+        u2[i] = (strata2[i] + jitter2[i]) / paths
+        if (u1[i] <= 0) u1[i] = 1e-12
+        if (u1[i] >= 1) u1[i] = 1 - 1e-12
+        if (u2[i] <= 0) u2[i] = 1e-12
+        if (u2[i] >= 1) u2[i] = 1 - 1e-12
+      }
     } catch {
-      uniforms = getUniformsPrng(paths * 2)
       qrngFallback = true
+      const jitter = getUniformsPrng(paths * 3)
+      const jitter1 = jitter.slice(0, paths)
+      const jitter2 = jitter.slice(paths, 2 * paths)
+      const shuf = jitter.slice(2 * paths)
+      const strata1b = Array.from({ length: paths }, (_, i) => i)
+      const strata2b = Array.from({ length: paths }, (_, i) => i)
+      shuffle(strata1b, shuf)
+      shuffle(strata2b, shuf.slice().reverse())
+      u1 = new Array(paths)
+      u2 = new Array(paths)
+      for (let i = 0; i < paths; i++) {
+        u1[i] = (strata1b[i] + jitter1[i]) / paths
+        u2[i] = (strata2b[i] + jitter2[i]) / paths
+        if (u1[i] <= 0) u1[i] = 1e-12
+        if (u1[i] >= 1) u1[i] = 1 - 1e-12
+        if (u2[i] <= 0) u2[i] = 1e-12
+        if (u2[i] >= 1) u2[i] = 1 - 1e-12
+      }
     }
   } else {
-    uniforms = getUniformsPrng(paths * 2)
+    const uniforms = getUniformsPrng(paths * 2)
+    u1 = new Array(paths)
+    u2 = new Array(paths)
+    for (let i = 0; i < paths; i++) {
+      u1[i] = Math.max(1e-12, uniforms[2 * i])
+      u2[i] = uniforms[2 * i + 1]
+    }
   }
 
   // Box-Muller
@@ -88,10 +142,8 @@ export async function POST(request: Request) {
   const drift = (r - 0.5 * sigma * sigma) * T
   const vol = sigma * Math.sqrt(T)
   for (let i = 0; i < paths; i++) {
-    const u1 = Math.max(1e-12, uniforms[2 * i])
-    const u2 = uniforms[2 * i + 1]
-    const R = Math.sqrt(-2.0 * Math.log(u1))
-    const Z = R * Math.cos(2 * Math.PI * u2)
+    const R = Math.sqrt(-2.0 * Math.log(u1[i]))
+    const Z = R * Math.cos(2 * Math.PI * u2[i])
     const ST = S0 * Math.exp(drift + vol * Z)
     payoffs[i] = Math.max(0, ST - K)
   }
@@ -112,6 +164,6 @@ export async function POST(request: Request) {
   const ci: [number, number] = [price - 1.96 * stderr, price + 1.96 * stderr]
 
   const runtimeMs = performance.now() - t0
-  return NextResponse.json({ mean: price, stderr, ci, runtimeMs, sampleCount: paths, qrngFallback })
+  return NextResponse.json({ mean: price, stderr, ci, runtimeMs, sampleCount: paths, qrngFallback, sampling })
 }
 
