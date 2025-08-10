@@ -214,7 +214,7 @@ export default function Page() {
       const res = await fetch("/api/sim/var", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ confidence: 0.99, rng, paths: 50000 }),
+        body: JSON.stringify({ confidence: varParams.confidence, rng, paths: varParams.paths }),
       })
       if (!res.ok) throw new Error("/api/sim/var failed")
       return res.json()
@@ -225,7 +225,7 @@ export default function Page() {
       const res = await fetch("/api/sim/option", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ S0: 100, K: 100, r: 0.01, sigma: 0.2, T: 1, paths: 100000, rng }),
+        body: JSON.stringify({ ...optionParams, rng }),
       })
       if (!res.ok) throw new Error("/api/sim/option failed")
       return res.json()

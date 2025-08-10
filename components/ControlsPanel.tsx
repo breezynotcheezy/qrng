@@ -43,58 +43,13 @@ export function ControlsPanel(props: {
   }
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <div className="flex items-end gap-2">
-        <div className="flex-1">
-          <Label>Use Case</Label>
-          <Select value={useCase} onValueChange={(v) => onChangeUseCase(v as UseCase)}>
-            <SelectTrigger className="w-full"><SelectValue placeholder="Use Case" /></SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value="var">VaR</SelectItem>
-                <SelectItem value="option">Option</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex-1">
-          <Label>RNG</Label>
-          <Select value={rng} onValueChange={(v) => onChangeRng(v as RngChoice)}>
-            <SelectTrigger className="w-full"><SelectValue placeholder="RNG" /></SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value="qrng">Quantum</SelectItem>
-                <SelectItem value="prng">Classical</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="self-stretch flex items-end">
-          <Button disabled={running} onClick={onRun} className="w-full">{running ? 'Running…' : 'Run'}</Button>
-        </div>
-      </div>
-
-      {useCase === 'var' ? (
-        <div className="grid grid-cols-2 gap-2 sm:col-span-3">
+    <div className="w-full rounded-lg border p-3 sm:p-4 bg-background/60">
+      <div className="grid gap-3 sm:grid-cols-4">
+        <div className="sm:col-span-4 grid gap-2 sm:grid-cols-3">
           <div>
-            <Label>Confidence</Label>
-            <Input type="number" step="0.001" min={0.5} max={0.9999} value={varParams.confidence}
-              onChange={(e) => onChangeVar({ ...varParams, confidence: Number(e.target.value) })} />
-          </div>
-          <div>
-            <Label>Paths</Label>
-            <Input type="number" step="1000" min={1000} value={varParams.paths}
-              onChange={(e) => onChangeVar({ ...varParams, paths: Number(e.target.value) })} />
-          </div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 gap-2 sm:col-span-3">
-          <div className="col-span-2 flex gap-2">
-            <div className="flex-1">
-              <Label>Ticker</Label>
-              <Input value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} />
-            </div>
-            <div className="self-end">
+            <Label>Ticker</Label>
+            <div className="flex gap-2">
+              <Input className="flex-1" value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} />
               <Button variant="secondary" onClick={fetchQuote}>Get Price</Button>
             </div>
           </div>
@@ -108,28 +63,45 @@ export function ControlsPanel(props: {
             <Input type="number" step="0.01" value={optionParams.K}
               onChange={(e) => onChangeOption({ ...optionParams, K: Number(e.target.value) })} />
           </div>
-          <div>
-            <Label>r (rate)</Label>
-            <Input type="number" step="0.0001" value={optionParams.r}
-              onChange={(e) => onChangeOption({ ...optionParams, r: Number(e.target.value) })} />
-          </div>
-          <div>
-            <Label>sigma (vol)</Label>
-            <Input type="number" step="0.0001" value={optionParams.sigma}
-              onChange={(e) => onChangeOption({ ...optionParams, sigma: Number(e.target.value) })} />
-          </div>
-          <div>
-            <Label>T (years)</Label>
-            <Input type="number" step="0.01" value={optionParams.T}
-              onChange={(e) => onChangeOption({ ...optionParams, T: Number(e.target.value) })} />
-          </div>
-          <div>
-            <Label>Paths</Label>
-            <Input type="number" step="1000" min={1000} value={optionParams.paths}
-              onChange={(e) => onChangeOption({ ...optionParams, paths: Number(e.target.value) })} />
-          </div>
         </div>
-      )}
+        <div>
+          <Label>r (rate)</Label>
+          <Input type="number" step="0.0001" value={optionParams.r}
+            onChange={(e) => onChangeOption({ ...optionParams, r: Number(e.target.value) })} />
+        </div>
+        <div>
+          <Label>sigma (vol)</Label>
+          <Input type="number" step="0.0001" value={optionParams.sigma}
+            onChange={(e) => onChangeOption({ ...optionParams, sigma: Number(e.target.value) })} />
+        </div>
+        <div>
+          <Label>T (years)</Label>
+          <Input type="number" step="0.01" value={optionParams.T}
+            onChange={(e) => onChangeOption({ ...optionParams, T: Number(e.target.value) })} />
+        </div>
+        <div>
+          <Label>Paths</Label>
+          <Input type="number" step="1000" min={1000} value={optionParams.paths}
+            onChange={(e) => onChangeOption({ ...optionParams, paths: Number(e.target.value) })} />
+        </div>
+        <div>
+          <Label>RNG</Label>
+          <Select value={rng} onValueChange={(v) => onChangeRng(v as RngChoice)}>
+            <SelectTrigger className="w-full"><SelectValue placeholder="RNG" /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="qrng">Quantum</SelectItem>
+                <SelectItem value="prng">Classical</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="sm:col-span-4">
+          <Button disabled={running} onClick={onRun} className="w-full">
+            {running ? 'Running…' : 'Run Pricing'}
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }
