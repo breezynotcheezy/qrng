@@ -33,6 +33,8 @@ import {
   ChartLegendContent,
 } from "@/components/ui/chart"
 import { Area, AreaChart, Line, LineChart as RLineChart, XAxis, YAxis, CartesianGrid } from "recharts"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { Input } from "@/components/ui/input"
 
 // Types
 type UseCase = "var" | "option"
@@ -68,8 +70,77 @@ function cryptoUniform(): number {
   return arr[0] / 2 ** 32
 }
 
+// QRNG API cache to avoid excessive calls
+const qrngCache = new Map<string, number[]>()
+const QRNG_CACHE_TTL = 30000 // 30 seconds
+
+async function fetchQrngNumbers(count: number): Promise<number[]> {
+  const cacheKey = `qrng_${count}`
+  const cached = qrngCache.get(cacheKey)
+  if (cached) {
+    return cached
+  }
+
+  try {
+    const response = await fetch('/api/rng', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        count,
+        dtype: 'uint16',
+        normalize: true
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error(`QRNG API failed: ${response.status}`)
+    }
+
+    const data = await response.json()
+    if (data.values && Array.isArray(data.values)) {
+      // Cache the result
+      qrngCache.set(cacheKey, data.values)
+      setTimeout(() => qrngCache.delete(cacheKey), QRNG_CACHE_TTL)
+      console.log(`✅ QRNG API success: fetched ${count} quantum random numbers, source: ${data.source}`)
+      return data.values
+    }
+  } catch (error) {
+    console.warn('❌ QRNG API call failed, falling back to crypto:', error)
+  }
+
+  // Fallback to crypto
+  const fallback = new Array(count)
+  for (let i = 0; i < count; i++) {
+    fallback[i] = cryptoUniform()
+  }
+  console.log(`⚠️ Using crypto fallback for ${count} numbers`)
+  return fallback
+}
+
+// Global QRNG buffer
+let qrngBuffer: number[] = []
+let qrngBufferIndex = 0
+
+async function ensureQrngBuffer(minSize: number = 1000) {
+  if (qrngBuffer.length - qrngBufferIndex < minSize) {
+    const newNumbers = await fetchQrngNumbers(2000)
+    qrngBuffer.push(...newNumbers)
+  }
+}
+
 function stratifiedQuantumUniform(i: number, batchSize: number): number {
-  // Low-variance stratified draw with slight crypto jitter inside the stratum
+  // Use quantum random numbers when available, fallback to stratified crypto
+  if (qrngBuffer.length > qrngBufferIndex) {
+    const quantumU = qrngBuffer[qrngBufferIndex++]
+    // Apply stratification to quantum numbers
+    const jitter = (quantumU - 0.5) / batchSize
+    let u = (i + 0.5) / batchSize + jitter
+    if (u < 0) u += 1
+    if (u >= 1) u -= 1
+    return u
+  }
+  
+  // Fallback to crypto with stratification
   const jitter = (cryptoUniform() - 0.5) / batchSize
   let u = (i + 0.5) / batchSize + jitter
   if (u < 0) u += 1
@@ -179,30 +250,30 @@ const fmtPct = (x: number) => `${(x * 100).toFixed(1)}%`
 // Chart configs
 const densityChartConfig = {
   prng: {
-    label: "PRNG Density",
-    color: "#8b5cf6", // vibrant purple
+    label: "Classical Density",
+    color: "#ef4444", // red-500
     icon: Database,
   },
   qrng: {
-    label: "QRNG Density", 
-    color: "#a855f7", // lighter purple
+    label: "Quantum Density", 
+    color: "#8b5cf6", // purple-500
     icon: Atom,
   },
-  prngUpper: { label: "PRNG 95% Upper", color: "#c4b5fd" }, // very light purple
-  prngLower: { label: "PRNG 95% Lower", color: "#c4b5fd" },
-  qrngUpper: { label: "QRNG 95% Upper", color: "#ddd6fe" }, // lightest purple
-  qrngLower: { label: "QRNG 95% Lower", color: "#ddd6fe" },
+  prngUpper: { label: "Classical 95% Upper", color: "#fca5a5" }, // red-300
+  prngLower: { label: "Classical 95% Lower", color: "#fca5a5" },
+  qrngUpper: { label: "Quantum 95% Upper", color: "#c4b5fd" }, // purple-300
+  qrngLower: { label: "Quantum 95% Lower", color: "#c4b5fd" },
 } as const
 
 const errorChartConfig = {
   prngError: {
-    label: "PRNG Error",
-    color: "#7c3aed", // deep purple
+    label: "Classical Error",
+    color: "#ef4444", // red-500
     icon: Database,
   },
   qrngError: {
-    label: "QRNG Error",
-    color: "#9333ea", // medium purple
+    label: "Quantum Error",
+    color: "#8b5cf6", // purple-500
     icon: Atom,
   },
 } as const
@@ -266,7 +337,7 @@ export default function Page() {
   // Controls
   const [useCase, setUseCase] = useState<UseCase>("option")
   const [varParams, setVarParams] = useState({ confidence: 0.99, paths: 50000 })
-  const [optionParams, setOptionParams] = useState({ S0: 100, K: 100, r: 0.01, sigma: 0.2, T: 1, paths: 100000 })
+  const [optionParams, setOptionParams] = useState({ symbol: 'AAPL', S0: 100, K: 100, r: 0.01, sigma: 0.2, T: 1, paths: 100000 })
   const [rngFocus, setRngFocus] = useState<RNG>("quantum")
   const [running, setRunning] = useState(false)
 
@@ -316,7 +387,7 @@ export default function Page() {
   const countsPRNG = useRef(new Array(bins).fill(0))
   const countsQRNG = useRef(new Array(bins).fill(0))
   const [densityRange, setDensityRange] = useState<{ min: number; max: number }>(
-    useCase === "var" ? { min: -5, max: 5 } : { min: 0, max: 60 },
+    useCase === "var" ? { min: -4, max: 4 } : { min: 0, max: 50 },
   )
 
   // Error trend series
@@ -361,10 +432,13 @@ export default function Page() {
     setDensityData([])
     setElapsedMs(0)
     t0Ref.current = 0
+    // Reset QRNG buffer
+    qrngBuffer = []
+    qrngBufferIndex = 0
     if (useCase === "var") {
-      setDensityRange({ min: -5, max: 5 })
+      setDensityRange({ min: -4, max: 4 })
     } else {
-      setDensityRange({ min: 0, max: 60 })
+      setDensityRange({ min: 0, max: 50 })
     }
   }
 
@@ -376,13 +450,16 @@ export default function Page() {
     let batchIndex = 0
     if (t0Ref.current === 0) t0Ref.current = performance.now()
 
-    const runBatch = () => {
+    const runBatch = async () => {
       if (cancelled || batchIndex >= maxBatches) {
         setRunning(false)
         return
       }
 
       const tBatchStart = performance.now()
+
+      // Ensure QRNG buffer is available
+      await ensureQrngBuffer(batchSize)
 
       // Generate uniforms for both streams
       const prngUs: number[] = new Array(batchSize)
@@ -560,10 +637,10 @@ export default function Page() {
 
       if (!cancelled && batchIndex < maxBatches) {
         if (pauseBetweenBatchesMs > 0) {
-          setTimeout(runBatch, pauseBetweenBatchesMs)
+          setTimeout(() => runBatch(), pauseBetweenBatchesMs)
         } else {
           // Schedule next microtask to keep UI responsive
-          setTimeout(runBatch, 0)
+          setTimeout(() => runBatch(), 0)
         }
       } else {
         setRunning(false)
@@ -768,69 +845,276 @@ export default function Page() {
   // UI
   return (
     <main className="dark min-h-screen flex flex-col bg-background text-foreground">
-      {/* Top Navigation */}
-      <header className="sticky top-0 z-20 border-b bg-background/80 backdrop-blur">
-        <div className="mx-auto max-w-7xl px-4 py-3 flex items-center gap-3">
-          <div className="flex items-center">
-            <span className="text-base sm:text-lg font-semibold tracking-tight">qrngtoolkit</span>
-          </div>
-          <div className="ml-auto flex items-center gap-2 sm:gap-3">
-            <div className="w-full">
-              <ControlsPanel
-                useCase={useCase as UseCaseType}
-                rng={rngFocus === "quantum" ? "qrng" : "prng"}
-                varParams={varParams}
-                optionParams={{ ...optionParams, symbol: undefined }}
-                onChangeUseCase={(uc) => setUseCase(uc as UseCase)}
-                onChangeRng={(r) => setRngFocus(r === "qrng" ? "quantum" : "classical")}
-                onChangeVar={(vp) => setVarParams(vp)}
-                onChangeOption={(op) => setOptionParams(op)}
-                onRun={async () => {
-                  if (useCase === "option") {
-                    totalsPRNG.current = { sum: 0, sumSq: 0 }
-                    totalsQRNG.current = { sum: 0, sumSq: 0 }
-                    totalsN.current = 0
-                  }
-                  // Start local client simulation
-                  setRunning(true)
-                  // Fire server-side simulations in parallel
-                  try {
-                    if (useCase === "var") {
-                      const reqBody = { confidence: varParams.confidence, paths: varParams.paths }
-                      const [prng, qrng] = await Promise.all([
-                        simVar.mutateAsync("prng"),
-                        simVar.mutateAsync("qrng"),
-                      ])
-                      const key = fnv1a32(JSON.stringify({ route: "var", ...reqBody }))
-                      setServerReproId(key)
-                      setServerResults({ var: { prng, qrng } })
-                      const adv = computeAdvantageFromCIs(
-                        ciSpan(prng.ci),
-                        ciSpan(qrng.ci),
-                        prng.sampleCount,
-                        qrng.sampleCount,
-                      )
-                      setServerAdvantage(adv)
-                    } else {
-                      const reqBody = { ...optionParams }
-                      const [prng, qrng] = await Promise.all([
-                        simOption.mutateAsync("prng"),
-                        simOption.mutateAsync("qrng"),
-                      ])
-                      const key = fnv1a32(JSON.stringify({ route: "option", ...reqBody }))
-                      setServerReproId(key)
-                      setServerResults({ option: { prng, qrng } })
-                      const widthPr = 2 * 1.96 * prng.stderr
-                      const widthQr = 2 * 1.96 * qrng.stderr
-                      const adv = computeAdvantageFromCIs(widthPr, widthQr, prng.sampleCount, qrng.sampleCount)
-                      setServerAdvantage(adv)
-                    }
-                  } catch (_) {
-                    // best-effort; UI continues with client demo
-                  }
-                }}
-                running={running}
-              />
+      {/* Pill-shaped Menu Header */}
+      <header className="sticky top-0 z-20 bg-background/80 backdrop-blur border-b">
+        <div className="mx-auto max-w-7xl px-4 py-4">
+          {/* Main Pill Navigation */}
+          <div className="flex flex-col gap-4">
+            {/* Top Row - Brand and Quick Actions */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                                 <div className="flex items-center gap-2">
+                   <Atom className="h-6 w-6 text-purple-400" />
+                   <span className="text-lg font-bold tracking-tight bg-gradient-to-r from-purple-400 to-purple-600 bg-clip-text text-transparent">
+                     qhaven sim
+                   </span>
+                 </div>
+              </div>
+              
+              {/* Quick Action Buttons */}
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={shareLink}
+                  className="hidden sm:flex"
+                >
+                  <Share2 className="h-4 w-4 mr-1" />
+                  Share
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={exportCSV}
+                  className="hidden sm:flex"
+                >
+                  <Download className="h-4 w-4 mr-1" />
+                  Export
+                </Button>
+              </div>
+            </div>
+
+            {/* Main Control Pill */}
+            <div className="bg-card/50 rounded-full border p-2 shadow-sm">
+              <div className="flex flex-col lg:flex-row gap-3 items-center">
+                {/* Use Case Selector */}
+                <div className="flex items-center gap-2">
+                  <Label className="text-sm font-medium whitespace-nowrap">Use Case:</Label>
+                  <ToggleGroup
+                    type="single"
+                    value={useCase}
+                    onValueChange={(v) => v && setUseCase(v as UseCase)}
+                    variant="outline"
+                    size="sm"
+                    className="bg-background/50"
+                  >
+                    <ToggleGroupItem value="option" className="text-xs px-3">
+                      <BarChart3 className="h-3 w-3 mr-1" />
+                      Option Pricing
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="var" className="text-xs px-3">
+                      <Gauge className="h-3 w-3 mr-1" />
+                      Value at Risk
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                </div>
+
+                {/* RNG Type Selector */}
+                <div className="flex items-center gap-2">
+                  <Label className="text-sm font-medium whitespace-nowrap">RNG Type:</Label>
+                  <ToggleGroup
+                    type="single"
+                    value={rngFocus}
+                    onValueChange={(v) => v && setRngFocus(v as RNG)}
+                    variant="outline"
+                    size="sm"
+                    className="bg-background/50"
+                  >
+                    <ToggleGroupItem value="quantum" className="text-xs px-3">
+                      <Atom className="h-3 w-3 mr-1" />
+                      Quantum
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="classical" className="text-xs px-3">
+                      <Database className="h-3 w-3 mr-1" />
+                      Classical
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                </div>
+
+                {/* Run Button */}
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={async () => {
+                      if (useCase === "option") {
+                        totalsPRNG.current = { sum: 0, sumSq: 0 }
+                        totalsQRNG.current = { sum: 0, sumSq: 0 }
+                        totalsN.current = 0
+                      }
+                      setRunning(true)
+                      try {
+                        if (useCase === "var") {
+                          const reqBody = { confidence: varParams.confidence, paths: varParams.paths }
+                          const [prng, qrng] = await Promise.all([
+                            simVar.mutateAsync("prng"),
+                            simVar.mutateAsync("qrng"),
+                          ])
+                          const key = fnv1a32(JSON.stringify({ route: "var", ...reqBody }))
+                          setServerReproId(key)
+                          setServerResults({ var: { prng, qrng } })
+                          const adv = computeAdvantageFromCIs(
+                            ciSpan(prng.ci),
+                            ciSpan(qrng.ci),
+                            prng.sampleCount,
+                            qrng.sampleCount,
+                          )
+                          setServerAdvantage(adv)
+                        } else {
+                          const reqBody = { ...optionParams }
+                          const [prng, qrng] = await Promise.all([
+                            simOption.mutateAsync("prng"),
+                            simOption.mutateAsync("qrng"),
+                          ])
+                          const key = fnv1a32(JSON.stringify({ route: "option", ...reqBody }))
+                          setServerReproId(key)
+                          setServerResults({ option: { prng, qrng } })
+                          const widthPr = 2 * 1.96 * prng.stderr
+                          const widthQr = 2 * 1.96 * qrng.stderr
+                          const adv = computeAdvantageFromCIs(widthPr, widthQr, prng.sampleCount, qrng.sampleCount)
+                          setServerAdvantage(adv)
+                        }
+                      } catch (_) {
+                        // best-effort; UI continues with client demo
+                      }
+                    }}
+                    disabled={running}
+                    size="sm"
+                                         className="bg-white hover:bg-gray-100 text-black border border-gray-300"
+                  >
+                    {running ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                        Running...
+                      </>
+                    ) : (
+                      <>
+                        <Play className="h-4 w-4 mr-1" />
+                        Run Simulation
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            {/* Parameters Panel - Collapsible */}
+            <div className="bg-card/30 rounded-lg border p-4">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {/* Option Parameters */}
+                {useCase === "option" && (
+                  <>
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">Ticker & Price</Label>
+                      <div className="flex gap-2">
+                        <Input 
+                          className="flex-1" 
+                          value={optionParams.symbol || 'AAPL'} 
+                          onChange={(e) => setOptionParams({...optionParams, symbol: e.target.value.toUpperCase()})}
+                          placeholder="AAPL"
+                        />
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={async () => {
+                            try {
+                              const res = await fetch(`/api/market/quote?symbol=${encodeURIComponent(optionParams.symbol || 'AAPL')}`)
+                              if (res.ok) {
+                                const json = await res.json()
+                                if (typeof json.price === 'number') {
+                                  setOptionParams({ ...optionParams, S0: json.price })
+                                }
+                              }
+                            } catch {}
+                          }}
+                        >
+                          Get Price
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">Spot Price (S₀)</Label>
+                      <Input 
+                        type="number" 
+                        step="0.01" 
+                        value={optionParams.S0}
+                        onChange={(e) => setOptionParams({ ...optionParams, S0: Number(e.target.value) })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">Strike Price (K)</Label>
+                      <Input 
+                        type="number" 
+                        step="0.01" 
+                        value={optionParams.K}
+                        onChange={(e) => setOptionParams({ ...optionParams, K: Number(e.target.value) })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">Risk-free Rate (r)</Label>
+                      <Input 
+                        type="number" 
+                        step="0.0001" 
+                        value={optionParams.r}
+                        onChange={(e) => setOptionParams({ ...optionParams, r: Number(e.target.value) })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">Volatility (σ)</Label>
+                      <Input 
+                        type="number" 
+                        step="0.0001" 
+                        value={optionParams.sigma}
+                        onChange={(e) => setOptionParams({ ...optionParams, sigma: Number(e.target.value) })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">Time to Expiry (T)</Label>
+                      <Input 
+                        type="number" 
+                        step="0.01" 
+                        value={optionParams.T}
+                        onChange={(e) => setOptionParams({ ...optionParams, T: Number(e.target.value) })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">Simulation Paths</Label>
+                      <Input 
+                        type="number" 
+                        step="1000" 
+                        min={1000} 
+                        value={optionParams.paths}
+                        onChange={(e) => setOptionParams({ ...optionParams, paths: Number(e.target.value) })}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {/* VaR Parameters */}
+                {useCase === "var" && (
+                  <>
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">Confidence Level</Label>
+                      <Input 
+                        type="number" 
+                        step="0.01" 
+                        min="0.5" 
+                        max="0.9999" 
+                        value={varParams.confidence}
+                        onChange={(e) => setVarParams({ ...varParams, confidence: Number(e.target.value) })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">Simulation Paths</Label>
+                      <Input 
+                        type="number" 
+                        step="1000" 
+                        min={1000} 
+                        value={varParams.paths}
+                        onChange={(e) => setVarParams({ ...varParams, paths: Number(e.target.value) })}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -912,13 +1196,26 @@ export default function Page() {
               {"Overlays with 95% bands"}
             </Badge>
           </CardHeader>
-          <CardContent className="h-[380px]">
+          <CardContent className="h-[400px]">
             <ChartContainer config={densityChartConfig} className="h-full w-full">
-              <AreaChart data={densityData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="x" tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
-                <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
+              <AreaChart data={densityData} margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.1)" />
+                <XAxis 
+                  dataKey="x" 
+                  tickLine={false} 
+                  axisLine={false} 
+                  tick={{ fontSize: 11, fill: 'rgba(255,255,255,0.7)' }}
+                  domain={[densityRange.min, densityRange.max]}
+                />
+                <YAxis 
+                  tickLine={false} 
+                  axisLine={false} 
+                  tick={{ fontSize: 11, fill: 'rgba(255,255,255,0.7)' }}
+                  domain={[0, 'dataMax + 0.1']}
+                  tickFormatter={(value) => value.toFixed(2)}
+                />
                 <ChartTooltip content={<ChartTooltipContent />} />
+                <ChartLegend content={({ payload }) => <ChartLegendContent payload={payload} />} />
                 {/* Confidence bands */}
                 <Area dataKey="prngUpper" stroke="transparent" fill="transparent" />
                 <Area dataKey="prngLower" stroke="transparent" fill="transparent" />
@@ -930,14 +1227,16 @@ export default function Page() {
                   dataKey="prng"
                   stroke="var(--color-prng)"
                   fill="var(--color-prng)"
-                  fillOpacity={0.2}
+                  fillOpacity={0.3}
+                  strokeWidth={2}
                 />
                 <Area
                   type="monotone"
                   dataKey="qrng"
                   stroke="var(--color-qrng)"
                   fill="var(--color-qrng)"
-                  fillOpacity={0.25}
+                  fillOpacity={0.35}
+                  strokeWidth={2}
                 />
               </AreaChart>
             </ChartContainer>
@@ -956,22 +1255,40 @@ export default function Page() {
             </Badge>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="h-[240px]">
+            <div className="h-[280px]">
               <ChartContainer config={errorChartConfig} className="h-full w-full">
-                <RLineChart data={errorSeries}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <RLineChart data={errorSeries} margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.1)" />
                   <XAxis
                     dataKey="n"
                     tickLine={false}
                     axisLine={false}
-                    tick={{ fontSize: 12 }}
+                    tick={{ fontSize: 11, fill: 'rgba(255,255,255,0.7)' }}
                     tickFormatter={(v) => fmtInt(v)}
                   />
-                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
+                  <YAxis 
+                    tickLine={false} 
+                    axisLine={false} 
+                    tick={{ fontSize: 11, fill: 'rgba(255,255,255,0.7)' }}
+                    domain={[0, 'dataMax + 0.01']}
+                    tickFormatter={(value) => value.toFixed(3)}
+                  />
                   <ChartTooltip content={<ChartTooltipContent />} />
                   <ChartLegend content={({ payload }) => <ChartLegendContent payload={payload} />} />
-                  <Line type="monotone" dataKey="prngError" stroke="var(--color-prngError)" dot={false} />
-                  <Line type="monotone" dataKey="qrngError" stroke="var(--color-qrngError)" dot={false} />
+                  <Line 
+                    type="monotone" 
+                    dataKey="prngError" 
+                    stroke="var(--color-prngError)" 
+                    strokeWidth={2}
+                    dot={false} 
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="qrngError" 
+                    stroke="var(--color-qrngError)" 
+                    strokeWidth={2}
+                    dot={false} 
+                  />
                 </RLineChart>
               </ChartContainer>
             </div>
@@ -1031,7 +1348,7 @@ export default function Page() {
         <section className="mx-auto max-w-7xl w-full px-4 py-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium">Server VaR (PRNG)</CardTitle>
+              <CardTitle className="text-sm font-medium">Server VaR (Classical)</CardTitle>
               <Database className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent className="space-y-1">
@@ -1043,7 +1360,7 @@ export default function Page() {
           </Card>
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium">Server VaR (QRNG)</CardTitle>
+              <CardTitle className="text-sm font-medium">Server VaR (Quantum)</CardTitle>
               <Atom className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent className="space-y-1">
@@ -1084,8 +1401,8 @@ export default function Page() {
         <section className="mx-auto max-w-7xl w-full px-4 py-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium">Server Price (PRNG)</CardTitle>
-              <Database className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm font-medium">Server Price (Classical)</CardTitle>
+              <Database className="h-4 w-4" style={{ color: "#ef4444" }} />
             </CardHeader>
             <CardContent className="space-y-1">
               <div className="text-xl font-semibold">{serverResults.option.prng.mean.toFixed(4)}</div>
@@ -1096,8 +1413,8 @@ export default function Page() {
           </Card>
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium">Server Price (QRNG)</CardTitle>
-              <Atom className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm font-medium">Server Price (Quantum)</CardTitle>
+              <Atom className="h-4 w-4" style={{ color: "#8b5cf6" }} />
             </CardHeader>
             <CardContent className="space-y-1">
               <div className="text-xl font-semibold">{serverResults.option.qrng.mean.toFixed(4)}</div>
@@ -1181,12 +1498,12 @@ export default function Page() {
               </Button>
               <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
                 <div className="flex items-center gap-1">
-                  <Database className="h-3.5 w-3.5" style={{ color: "var(--color-prng)" }} />
-                  <span>{"PRNG"}</span>
+                  <Database className="h-3.5 w-3.5" style={{ color: "#ef4444" }} />
+                  <span>{"Classical"}</span>
                 </div>
                 <div className="flex items-center gap-1">
-                  <Atom className="h-3.5 w-3.5" style={{ color: "var(--color-qrng)" }} />
-                  <span>{"QRNG"}</span>
+                  <Atom className="h-3.5 w-3.5" style={{ color: "#8b5cf6" }} />
+                  <span>{"Quantum"}</span>
                 </div>
               </div>
               {serverResults && (

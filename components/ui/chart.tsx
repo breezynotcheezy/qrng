@@ -153,7 +153,15 @@ function ChartTooltipContent({
       return null
     }
 
-    return <div className={cn("font-medium", labelClassName)}>{value}</div>
+    const itemColor = itemConfig?.color
+    return (
+      <div 
+        className={cn("font-medium", labelClassName)}
+        style={itemColor ? { color: itemColor } : undefined}
+      >
+        {value}
+      </div>
+    )
   }, [
     label,
     labelFormatter,
@@ -228,7 +236,11 @@ function ChartTooltipContent({
                   >
                     <div className="grid gap-1.5">
                       {nestLabel ? tooltipLabel : null}
-                      <span className="text-muted-foreground">
+                      <span
+                        style={{
+                          color: itemConfig?.color || indicatorColor,
+                        }}
+                      >
                         {itemConfig?.label || item.name}
                       </span>
                     </div>
@@ -296,7 +308,13 @@ function ChartLegendContent({
                 }}
               />
             )}
-            {itemConfig?.label}
+            <span
+              style={{
+                color: itemConfig?.color || item.color,
+              }}
+            >
+              {itemConfig?.label}
+            </span>
           </div>
         )
       })}
