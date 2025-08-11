@@ -21,7 +21,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { ControlsPanel, UseCase as UseCaseType } from "@/components/ControlsPanel"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+// Removed unused Select imports after switching to segmented toggles in ControlsPanel
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Label } from "@/components/ui/label"
@@ -180,29 +180,29 @@ const fmtPct = (x: number) => `${(x * 100).toFixed(1)}%`
 const densityChartConfig = {
   prng: {
     label: "PRNG Density",
-    color: "hsl(var(--chart-2))",
+    color: "#8b5cf6", // vibrant purple
     icon: Database,
   },
   qrng: {
-    label: "QRNG Density",
-    color: "hsl(var(--chart-1))",
+    label: "QRNG Density", 
+    color: "#a855f7", // lighter purple
     icon: Atom,
   },
-  prngUpper: { label: "PRNG 95% Upper", color: "hsl(var(--muted-foreground))" },
-  prngLower: { label: "PRNG 95% Lower", color: "hsl(var(--muted-foreground))" },
-  qrngUpper: { label: "QRNG 95% Upper", color: "hsl(var(--muted-foreground))" },
-  qrngLower: { label: "QRNG 95% Lower", color: "hsl(var(--muted-foreground))" },
+  prngUpper: { label: "PRNG 95% Upper", color: "#c4b5fd" }, // very light purple
+  prngLower: { label: "PRNG 95% Lower", color: "#c4b5fd" },
+  qrngUpper: { label: "QRNG 95% Upper", color: "#ddd6fe" }, // lightest purple
+  qrngLower: { label: "QRNG 95% Lower", color: "#ddd6fe" },
 } as const
 
 const errorChartConfig = {
   prngError: {
     label: "PRNG Error",
-    color: "hsl(var(--chart-2))",
+    color: "#7c3aed", // deep purple
     icon: Database,
   },
   qrngError: {
     label: "QRNG Error",
-    color: "hsl(var(--chart-1))",
+    color: "#9333ea", // medium purple
     icon: Atom,
   },
 } as const
@@ -969,7 +969,7 @@ export default function Page() {
                   />
                   <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
                   <ChartTooltip content={<ChartTooltipContent />} />
-                  <ChartLegend content={<ChartLegendContent />} />
+                  <ChartLegend content={({ payload }) => <ChartLegendContent payload={payload} />} />
                   <Line type="monotone" dataKey="prngError" stroke="var(--color-prngError)" dot={false} />
                   <Line type="monotone" dataKey="qrngError" stroke="var(--color-qrngError)" dot={false} />
                 </RLineChart>

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 export type UseCase = 'var' | 'option'
 export type RngChoice = 'qrng' | 'prng'
@@ -45,6 +45,21 @@ export function ControlsPanel(props: {
   return (
     <div className="w-full rounded-lg border p-3 sm:p-4 bg-background/60">
       <div className="grid gap-3 sm:grid-cols-4">
+        <div>
+          <Label>Use Case</Label>
+          <ToggleGroup
+            type="single"
+            value={useCase}
+            onValueChange={(v) => v && onChangeUseCase(v as UseCase)}
+            variant="outline"
+            size="sm"
+            className="mt-1"
+            aria-label="Select use case"
+          >
+            <ToggleGroupItem value="option" aria-label="Option Pricing">Option</ToggleGroupItem>
+            <ToggleGroupItem value="var" aria-label="Value at Risk">VaR</ToggleGroupItem>
+          </ToggleGroup>
+        </div>
         <div className="sm:col-span-4 grid gap-2 sm:grid-cols-3">
           <div>
             <Label>Ticker</Label>
@@ -86,15 +101,18 @@ export function ControlsPanel(props: {
         </div>
         <div>
           <Label>RNG</Label>
-          <Select value={rng} onValueChange={(v) => onChangeRng(v as RngChoice)}>
-            <SelectTrigger className="w-full"><SelectValue placeholder="RNG" /></SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value="qrng">Quantum</SelectItem>
-                <SelectItem value="prng">Classical</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          <ToggleGroup
+            type="single"
+            value={rng}
+            onValueChange={(v) => v && onChangeRng(v as RngChoice)}
+            variant="outline"
+            size="sm"
+            className="mt-1"
+            aria-label="Select RNG type"
+          >
+            <ToggleGroupItem value="qrng" aria-label="Quantum RNG">Quantum</ToggleGroupItem>
+            <ToggleGroupItem value="prng" aria-label="Classical RNG">Classical</ToggleGroupItem>
+          </ToggleGroup>
         </div>
         <div className="sm:col-span-4">
           <Button disabled={running} onClick={onRun} className="w-full">
