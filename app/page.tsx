@@ -342,7 +342,7 @@ export default function Page() {
   const [running, setRunning] = useState(false)
 
   // Simulation parameters
-  const batchSize = 1000
+  const batchSize = 250
   const maxBatches = 100 // up to 100k samples per stream
   const pauseBetweenBatchesMs = 0 // tight loop; adjust if needed
 
@@ -387,7 +387,7 @@ export default function Page() {
   const countsPRNG = useRef(new Array(bins).fill(0))
   const countsQRNG = useRef(new Array(bins).fill(0))
   const [densityRange, setDensityRange] = useState<{ min: number; max: number }>(
-    useCase === "var" ? { min: -4, max: 4 } : { min: 0, max: 50 },
+    useCase === "var" ? { min: -2, max: 2 } : { min: 0, max: 10 },
   )
 
   // Error trend series
@@ -436,9 +436,9 @@ export default function Page() {
     qrngBuffer = []
     qrngBufferIndex = 0
     if (useCase === "var") {
-      setDensityRange({ min: -4, max: 4 })
+      setDensityRange({ min: -2, max: 2 })
     } else {
-      setDensityRange({ min: 0, max: 50 })
+      setDensityRange({ min: 0, max: 10 })
     }
   }
 
@@ -573,7 +573,7 @@ export default function Page() {
         const prngPayoffsSample: number[] = [] // for hist only: small subset to reduce cost
         const qrngPayoffsSample: number[] = []
         // Regenerate a small subset (100) for histogram from the same uniforms to avoid storing all
-        const subset = 100
+        const subset = 50
         for (let i = 0; i < subset; i++) {
           const u1 = prngRef.current.next(),
             u2 = prngRef.current.next()
@@ -639,8 +639,9 @@ export default function Page() {
         if (pauseBetweenBatchesMs > 0) {
           setTimeout(() => runBatch(), pauseBetweenBatchesMs)
         } else {
-          // Schedule next microtask to keep UI responsive
-          setTimeout(() => runBatch(), 0)
+          // Yield to the browser to paint before next batch
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+          runBatch()
         }
       } else {
         setRunning(false)
@@ -752,6 +753,13 @@ export default function Page() {
         : estimatePRNG
   const truth = useCase === "var" ? varTrue : bsTrue
   const errorNow = Math.abs(estimateValue - truth)
+
+  // Zoom: show only the most recent window of the error series for readability
+  const displayedErrorSeries = useMemo(() => {
+    const windowSize = 100
+    if (errorSeries.length <= windowSize) return errorSeries
+    return errorSeries.slice(-windowSize)
+  }, [errorSeries])
 
   // Export CSV
   function exportCSV() {
@@ -1229,6 +1237,7 @@ export default function Page() {
                   fill="var(--color-prng)"
                   fillOpacity={0.3}
                   strokeWidth={2}
+                  isAnimationActive={false}
                 />
                 <Area
                   type="monotone"
@@ -1237,6 +1246,7 @@ export default function Page() {
                   fill="var(--color-qrng)"
                   fillOpacity={0.35}
                   strokeWidth={2}
+                  isAnimationActive={false}
                 />
               </AreaChart>
             </ChartContainer>
@@ -1257,7 +1267,7 @@ export default function Page() {
           <CardContent className="space-y-4">
             <div className="h-[280px]">
               <ChartContainer config={errorChartConfig} className="h-full w-full">
-                <RLineChart data={errorSeries} margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
+                <RLineChart data={displayedErrorSeries} margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.1)" />
                   <XAxis
                     dataKey="n"
@@ -1280,14 +1290,16 @@ export default function Page() {
                     dataKey="prngError" 
                     stroke="var(--color-prngError)" 
                     strokeWidth={2}
-                    dot={false} 
+                    dot={false}
+                    isAnimationActive={false}
                   />
                   <Line 
                     type="monotone" 
                     dataKey="qrngError" 
                     stroke="var(--color-qrngError)" 
                     strokeWidth={2}
-                    dot={false} 
+                    dot={false}
+                    isAnimationActive={false}
                   />
                 </RLineChart>
               </ChartContainer>
